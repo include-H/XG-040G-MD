@@ -1,0 +1,122 @@
+#!/bin/sh
+# dae-sub — 把机场订阅规范化成 dae 能吃的 base64 文件
+#
+# dae 只认两种订阅内容：base64 编码的分享链接列表、SIP008 JSON。
+# 本工具负责格式归一化：
+#   - 纯文本分享链接列表（vless://... 每行一条） -> base64
+#   - 已经是 base64 的                              -> 原样保存
+#   - Clash YAML（proxies: 开头）                   -> 明确报错，请换机场的通用链接
+#
+# 用法：
+#   dae-sub add <名字> <URL>     拉取并保存，成功后打印要写进 config.dae 的那一行
+#   dae-sub update [名字]        重新拉取全部（或指定一个），并 reload dae
+#   dae-sub list                 列出已保存的订阅
+#   dae-sub del <名字>           删除订阅及其 URL 记录
+#
+# 订阅 URL 存在 /etc/dae/sub-urls（权限 600），节点数据存 /etc/dae/sub-<名字>.txt。
+# 本脚本不打印、不记录订阅内容。
+
+set -u
+
+DIR=/etc/dae
+URLS="$DIR/sub-urls"
+UA='dae/2.0.0 (like v2rayN/1.0 WebRequestHelper)'
+
+die() { echo "dae-sub: $*" >&2; exit 1; }
+need_root() { [ "$(id -u)" = 0 ] || die "需要 root 运行"; }
+valid_name() { echo "$1" | grep -Eq '^[A-Za-z0-9_-]+$'; }
+
+reload_dae() {
+	[ -x /etc/init.d/dae ] && /etc/init.d/dae reload >/dev/null 2>&1 || true
+}
+
+fetch_and_normalize() { # $1=url $2=out
+	url=$1 out=$2 tmp="$DIR/.fetch.$$"
+	curl -fsSL --max-time 60 -A "$UA" -o "$tmp" "$url" || { rm -f "$tmp"; return 1; }
+
+	if head -c 200 "$tmp" | grep -qiE '^(---|proxies:|mixed-port:|port:)'; then
+		rm -f "$tmp"; return 2
+	fi
+
+	if grep -q '://' "$tmp"; then
+		base64 "$tmp" | tr -d '\n' > "$out"
+	else
+		base64 -d "$tmp" 2>/dev/null | grep -q '://' || { rm -f "$tmp"; return 3; }
+		cp "$tmp" "$out"
+	fi
+
+	rm -f "$tmp"
+	chmod 600 "$out"
+	return 0
+}
+
+cmd_add() {
+	name=${1:-} url=${2:-}
+	[ -n "$name" ] && [ -n "$url" ] || die "用法: dae-sub add <名字> <URL>"
+	valid_name "$name" || die "名字只能用字母、数字、下划线、连字符"
+	out="$DIR/sub-$name.txt"
+
+	fetch_and_normalize "$url" "$out"
+	case $? in
+	0) ;;
+	2) die "返回的是 Clash YAML，dae 不支持；请改用机场的通用/非 Clash 订阅链接" ;;
+	3) die "无法识别的订阅内容（既不是分享链接也不是 base64）" ;;
+	*) die "下载失败" ;;
+	esac
+
+	grep -v "	$name\$" "$URLS" 2>/dev/null > "$URLS.tmp" || true
+	printf '%s\t%s\n' "$name" "$url" >> "$URLS.tmp"
+	mv "$URLS.tmp" "$URLS"
+	chmod 600 "$URLS"
+
+	echo "[OK] 已保存 $out"
+	echo
+	echo "把这一行加到 /etc/dae/config.dae 的 subscription 段："
+	echo "  $name: 'file://$out'"
+	echo
+	echo "然后执行: /etc/init.d/dae reload"
+}
+
+cmd_update() {
+	only=${1:-}
+	[ -f "$URLS" ] || die "还没有任何订阅，先 dae-sub add"
+	rc=0
+	while IFS='	' read -r name url; do
+		[ -n "$name" ] || continue
+		[ -z "$only" ] || [ "$only" = "$name" ] || continue
+		if fetch_and_normalize "$url" "$DIR/sub-$name.txt"; then
+			echo "[OK] $name"
+		else
+			echo "[FAIL] $name" >&2; rc=1
+		fi
+	done < "$URLS"
+	reload_dae
+	return $rc
+}
+
+cmd_list() {
+	[ -f "$URLS" ] || { echo "没有订阅"; return 0; }
+	while IFS='	' read -r name url; do
+		[ -n "$name" ] || continue
+		count=0
+		[ -f "$DIR/sub-$name.txt" ] && count=$(base64 -d "$DIR/sub-$name.txt" 2>/dev/null | grep -c '://')
+		printf '%-16s %4s 节点  file://%s/sub-%s.txt\n' "$name" "$count" "$DIR" "$name"
+	done < "$URLS"
+}
+
+cmd_del() {
+	name=${1:-}
+	[ -n "$name" ] || die "用法: dae-sub del <名字>"
+	rm -f "$DIR/sub-$name.txt"
+	grep -v "	$name\$" "$URLS" > "$URLS.tmp" 2>/dev/null && mv "$URLS.tmp" "$URLS"
+	echo "[OK] 已删除 $name（记得同时删掉 config.dae 里的 subscription 行）"
+}
+
+need_root
+case ${1:-} in
+add)    shift; cmd_add "$@" ;;
+update) shift; cmd_update "$@" ;;
+list)   cmd_list ;;
+del)    shift; cmd_del "$@" ;;
+*)      sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' ;;
+esac

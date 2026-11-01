@@ -1,0 +1,51 @@
+#!/bin/sh
+# MosDNS 出厂默认值：国内 DoH + 缓存 + 广告过滤
+#
+# 设计取舍：
+#   - 只用国内 DoH，保证在没有代理的环境下也能解析；
+#   - 不做域名分流（geosite_cn / !cn 两组上游），减少一层判断和故障点；
+#   - 流量分流交给代理端（mihomo/Clash 等），MosDNS 只负责
+#     “解析快 + 结果干净 + 拦广告”。
+#   - dnsmasq 仍是 53，MosDNS 监听 5335，redirect=1 让 dnsmasq 把查询转过来，
+#     dnsmasq 自身缓存关闭，避免两层缓存打架。
+
+[ -f /etc/config/mosdns ] || exit 0
+
+uci -q batch <<-EOF
+	set mosdns.config.enabled='1'
+	set mosdns.config.listen_port='5335'
+	set mosdns.config.listen_address='0.0.0.0'
+	set mosdns.config.redirect='1'
+	set mosdns.config.cache='1'
+	set mosdns.config.cache_size='8000'
+	set mosdns.config.lazy_cache_ttl='86400'
+	set mosdns.config.dump_file='1'
+	set mosdns.config.concurrent='2'
+	set mosdns.config.log_level='error'
+	set mosdns.config.geo_auto_update='1'
+	set mosdns.config.geo_update_day_time='3'
+
+	# 广告过滤：AdGuard 语法，adblock_set 原生解析
+	set mosdns.config.adblock='1'
+	delete mosdns.config.ad_source
+	add_list mosdns.config.ad_source='https://gcore.jsdelivr.net/gh/217heidai/adblockfilters@main/rules/adblockdns.txt'
+
+	# 国内上游（DoH）
+	set mosdns.config.custom_local_dns='1'
+	delete mosdns.config.local_dns
+	add_list mosdns.config.local_dns='https://223.5.5.5/dns-query'
+	add_list mosdns.config.local_dns='https://223.6.6.6/dns-query'
+	add_list mosdns.config.local_dns='https://doh.pub/dns-query'
+	add_list mosdns.config.local_dns='https://1.12.12.12/dns-query'
+	add_list mosdns.config.local_dns='https://120.53.53.53/dns-query'
+
+	# 非 CN 域名同样先用国内 DoH，保证无代理环境下可用；
+	# 需要更干净的境外解析时，可在 LuCI 里改成代理端的 DNS 端口。
+	delete mosdns.config.remote_dns
+	add_list mosdns.config.remote_dns='https://223.5.5.5/dns-query'
+	add_list mosdns.config.remote_dns='https://120.53.53.53/dns-query'
+
+	commit mosdns
+EOF
+
+exit 0

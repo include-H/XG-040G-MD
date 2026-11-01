@@ -1,0 +1,408 @@
+# ============================================================
+# ImmortalWrt 固件编译工作流 (AN7581 XGS-PON)
+# 目标设备: Nokia XG-040G-MD (Airoha AN7581)
+# 源码来源: https://github.com/DenzelVincent/ponwrt.git (master 分支)
+# 触发方式: 手动触发 (workflow_dispatch)
+# ============================================================
+
+name: Build ImmortalWrt Firmware (AN7581)
+on:
+  # 定时编译 (默认关闭，取消注释即可启用，cron 使用 UTC 时间)
+  # schedule:
+  #   - cron: "0 21 * * *"
+  # 手动触发：可在 GitHub Actions 页面点击 "Run workflow" 按钮
+  workflow_dispatch:
+    inputs:
+      # dl 源码包下载缓存：默认启用，Cache downloads 步骤恒定恢复、收尾保存。
+      # 勾选后 Clear dl cache 先删掉 ${CONFIG_NAME}-dl- 前缀条目，本趟全量重下、收尾重灌。
+      clean_dl_cache:
+        description: 先清空 dl 下载缓存再编译（改了 package 的源码版本/地址、或怀疑 dl 里是旧包时勾选）
+        type: boolean
+        default: false
+      # ccache 编译对象缓存：同样默认启用，CONFIG_CCACHE=y 由 Load custom config 步骤写进 .config。
+      # 勾选后先删 ${CONFIG_NAME}-ccache- 前缀条目，本趟全部未命中、收尾重灌。
+      clean_ccache:
+        description: 先清空 ccache 编译对象缓存再编译（怀疑产物不对、需排除 ccache 时勾选）
+        type: boolean
+        default: false
+      # Release 发布开关：默认关闭，只上传 artifact，不创建 GitHub Release、不清理旧 runs/Releases。
+      release:
+        description: 编译成功后创建 GitHub Release（默认关闭，关闭时只保留 artifact）
+        type: boolean
+        default: false
+
+env:
+  # 源码仓库地址
+  REPO_URL: https://github.com/DenzelVincent/ponwrt.git
+  # 源码分支：AN7581 使用 master 分支（纯净基线，不含 GPON PCS 改动）
+  REPO_BRANCH: master
+  # 设备配置文件（make menuconfig 生成），工作流把它复制成 openwrt/.config
+  # hashFiles 只接受字面量，改名须同步下面两条 cache key 里的文件名
+  CONFIG_FILE: an7581.config
+  # cache key 前缀 = 配置文件名去掉 .config，换设备时与上面成对改
+  CONFIG_NAME: an7581
+  # 目标设备和子目标（编译产物路径使用）
+  DEVICE_NAME: XG-040G-MD
+  SUBTARGET: an7581
+  # 三个自定义脚本 = 流程里的三个插入点，执行阶段见各行注释
+  # 1) ./scripts/feeds update -a 之前 —— 增删第三方 feed 源（当前插入 mosdns，追加 mosdns_panel 与 lucky）
+  SCRIPT_ADD_FEED_SOURCES: add-feed-sources.sh
+  # 2) ./scripts/feeds install -a 之后、make defconfig 之前 —— clone 非 feed 格式的第三方包（lucky / mosdns / mosdns_panel 由 add-feed-sources.sh 处理，此处仅 npu）
+  SCRIPT_CLONE_PACKAGES: clone-packages.sh
+  # 3) make defconfig 之后 —— 改固件出厂默认值 (默认 IP、DHCP 等)
+  SCRIPT_SET_FIRMWARE_DEFAULTS: set-firmware-defaults.sh
+  # 编译环境时区
+  TZ: Asia/Shanghai
+  # 可选覆盖：本仓库根目录存在该文件时才 mv 覆盖源码自带 feeds，当前不存在
+  FEEDS_CONF: feeds.conf.default
+
+jobs:
+  build:
+    name: build-firmware
+    runs-on: ubuntu-24.04
+
+    permissions:
+      actions: write    # 允许上传编译产物 artifact
+
+    steps:
+    # ----------------------------------------------------------
+    # 步骤 1: 释放磁盘空间（删除 runner 上的 Android/.NET/Haskell 等工具链）
+    # ----------------------------------------------------------
+    - name: Free disk space (Ubuntu)
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: false
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: true
+        swap-storage: false
+
+    # ----------------------------------------------------------
+    # 步骤 2: 检出本仓库（设备配置文件与自定义脚本）
+    # ----------------------------------------------------------
+    - name: Checkout
+      uses: actions/checkout@main
+
+    # ----------------------------------------------------------
+    # 步骤 3: 安装编译依赖（完整工具链）
+    # ----------------------------------------------------------
+    - name: Install build dependencies
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          asciidoc autoconf automake autopoint binutils bison build-essential \
+          bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk \
+          gettext git g++-multilib gcc-multilib gperf help2man intltool \
+          libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev \
+          libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+          libtool libyaml-dev lld llvm ninja-build p7zip-full patch pkgconf \
+          python3 python3-docutils python3-pip python3-ply python3-pyelftools \
+          qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
+          uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
+        sudo -E apt-get -qq autoremove --purge
+        sudo -E apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /srcdir
+        sudo chown $USER:$GROUPS /srcdir
+
+    # ----------------------------------------------------------
+    # 步骤 4: 克隆源码到 /srcdir（磁盘更大），软链接回工作区
+    # ----------------------------------------------------------
+    - name: Clone source code
+      working-directory: /srcdir
+      run: |
+        echo "Free space:"
+        df -hT $PWD
+        git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+        ln -sf /srcdir/openwrt $GITHUB_WORKSPACE/openwrt
+        # 版本号取 openwrt/include/version.mk 里 VERSION_NUMBER 的兜底字面量，供产物名与 Release 标签使用
+        raw="$(grep -m1 -F 'VERSION_NUMBER:=$(if ' openwrt/include/version.mk)"
+        ver="${raw%)}"
+        ver="${ver##*,}"
+        [ -n "$ver" ] || { echo "::error::没能从 openwrt/include/version.mk 解析出 VERSION_NUMBER"; exit 1; }
+        echo "FW_VERSION=$ver" >> $GITHUB_ENV
+
+    # ----------------------------------------------------------
+    # 步骤 5: 缓存 dl/（源码包）与 openwrt/.ccache（编译对象），两层默认启用
+    # Clear ... cache 必须排在同层 Cache 之前，否则本趟仍用旧缓存、开关等于没生效
+    # key = CONFIG_NAME + -dl-/-ccache- + 配置内容哈希；设备名前置以保证各前缀互不为前缀
+    # ccache 路径须与 rules.mk 的 CCACHE_DIR 默认值 $(TOPDIR)/.ccache 一致，写 ~/.ccache 命中率恒 0
+    # ----------------------------------------------------------
+    - name: Clear dl cache
+      if: ${{ inputs.clean_dl_cache }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # 删掉本设备前缀的全部缓存条目（--limit 100 是 API 单页上限）
+        gh cache list --limit 100 --json key,id | \
+          jq -r '.[] | select(.key | startswith("${{ env.CONFIG_NAME }}-dl-")) | .id' | \
+          xargs -r gh cache delete
+        # 删净断言：还有残留说明条目超过单页上限或别的 ref 仍有同名前缀，本趟不算冷编译
+        left=$(gh cache list --limit 100 --json key | \
+          jq '[.[] | select(.key | startswith("${{ env.CONFIG_NAME }}-dl-"))] | length')
+        if [ "$left" != "0" ]; then
+          echo "::error::清理后 ${{ env.CONFIG_NAME }}-dl- 前缀仍剩 $left 条缓存条目，本趟不算冷编译"
+          exit 1
+        fi
+
+    - name: Cache downloads
+      uses: actions/cache@v4
+      with:
+        path: openwrt/dl
+        key: ${{ env.CONFIG_NAME }}-dl-${{ hashFiles('feeds.conf.default', 'an7581.config') }}
+        restore-keys: |
+          ${{ env.CONFIG_NAME }}-dl-
+
+    - name: Clear ccache
+      if: ${{ inputs.clean_ccache }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        # 删掉本设备前缀的全部缓存条目（--limit 100 是 API 单页上限）
+        gh cache list --limit 100 --json key,id | \
+          jq -r '.[] | select(.key | startswith("${{ env.CONFIG_NAME }}-ccache-")) | .id' | \
+          xargs -r gh cache delete
+        # 删净断言：还有残留说明条目超过单页上限或别的 ref 仍有同名前缀，本趟不算冷编译
+        left=$(gh cache list --limit 100 --json key | \
+          jq '[.[] | select(.key | startswith("${{ env.CONFIG_NAME }}-ccache-"))] | length')
+        if [ "$left" != "0" ]; then
+          echo "::error::清理后 ${{ env.CONFIG_NAME }}-ccache- 前缀仍剩 $left 条缓存条目，本趟不算冷编译"
+          exit 1
+        fi
+
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: openwrt/.ccache
+        key: ${{ env.CONFIG_NAME }}-ccache-${{ hashFiles('feeds.conf.default', 'an7581.config') }}
+        restore-keys: |
+          ${{ env.CONFIG_NAME }}-ccache-
+
+    # ----------------------------------------------------------
+    # 步骤 6: 加载自定义 feeds 源
+    # 根目录存在 feeds.conf.default 时覆盖源码默认值，然后执行 add-feed-sources.sh
+    # ----------------------------------------------------------
+    - name: Load custom feeds
+      run: |
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        chmod +x $SCRIPT_ADD_FEED_SOURCES
+        cd openwrt
+        $GITHUB_WORKSPACE/$SCRIPT_ADD_FEED_SOURCES
+
+    # ----------------------------------------------------------
+    # 步骤 7: 更新 feeds，拉取各源的软件包定义
+    # ----------------------------------------------------------
+    - name: Update feeds
+      run: cd openwrt && ./scripts/feeds update -a
+
+    # ----------------------------------------------------------
+    # 步骤 8: 安装 feeds 到编译环境
+    # ----------------------------------------------------------
+    - name: Install feeds
+      run: cd openwrt && ./scripts/feeds install -a
+
+    # ----------------------------------------------------------
+    # 步骤 8.5: 执行 clone-packages.sh 克隆非 feed 格式的第三方包（lucky / mosdns / mosdns_panel 已由 add-feed-sources.sh 增删的 feed 提供，此处仅 airoha-npu；须在 feeds install 之后）
+    # ----------------------------------------------------------
+    - name: Clone custom packages
+      run: |
+        chmod +x $SCRIPT_CLONE_PACKAGES
+        cd openwrt
+        $GITHUB_WORKSPACE/$SCRIPT_CLONE_PACKAGES
+
+    # ----------------------------------------------------------
+    # 步骤 9: 加载 APK 仓库签名密钥（Secret: PONWRT_APK_PRIVATE_KEY，未配置则跳过）
+    # ----------------------------------------------------------
+    - name: Load repository signing key
+      working-directory: openwrt
+      env:
+        PONWRT_APK_PRIVATE_KEY: ${{ secrets.PONWRT_APK_PRIVATE_KEY }}
+      run: |
+        if [ -n "$PONWRT_APK_PRIVATE_KEY" ]; then
+          umask 077
+          printf '%s\n' "$PONWRT_APK_PRIVATE_KEY" > private-key.pem
+          openssl ec -in private-key.pem -pubout -out public-key.pem
+        fi
+
+    # ----------------------------------------------------------
+    # 步骤 10: 设备配置复制成 openwrt/.config 并追加 CONFIG_CCACHE=y
+    # make defconfig 生成完整配置；files/ 存在则作为固件预置文件；
+    # 随后执行 set-firmware-defaults.sh
+    # ----------------------------------------------------------
+    - name: Load custom config
+      run: |
+        [ -e files ] && mv files openwrt/files
+        # 缺配置文件必须显式失败：写成 [ -e x ] && cp 时 set -e 不会终止步骤，
+        # 会静默用源码仓库默认配置编到底，产出没有本项目软件包的固件还显示成功。
+        if [ ! -e "$CONFIG_FILE" ]; then
+          echo "::error::缺少编译配置文件 $CONFIG_FILE（应位于本仓库根目录，检查工作流 CONFIG_FILE 与分支上的文件名是否一致）"
+          exit 1
+        fi
+        cp "$CONFIG_FILE" openwrt/.config
+        # CONFIG_CCACHE=y 只写进 .config（rules.mk 读的就是它，与命令行传参等价，少一处会改漏的状态）；
+        # 前置 \n 防止配置末行缺换行符时粘成一条无效行、被 kconfig 静默忽略。
+        printf '\n%s\n' 'CONFIG_CCACHE=y' >> openwrt/.config
+        chmod +x $SCRIPT_SET_FIRMWARE_DEFAULTS
+        cd openwrt
+        make defconfig
+        # 自检：开关被 defconfig 丢掉就立刻失败，别白编一趟
+        grep -q '^CONFIG_CCACHE=y' .config || {
+          echo "::error::CONFIG_CCACHE=y 没能进入 defconfig 结果，检查 $CONFIG_FILE 里是否有 CONFIG_DEVEL=y"
+          exit 1
+        }
+        $GITHUB_WORKSPACE/$SCRIPT_SET_FIRMWARE_DEFAULTS
+
+    # ----------------------------------------------------------
+    # 步骤 11: 预下载源码包，避免编译期网络超时
+    # 不按大小清理 dl/：go-mod-cache 里上千个 <1KB 的正常文件会被误删（run 104976085590），怀疑坏包就勾 clean_dl_cache
+    # ----------------------------------------------------------
+    - name: Download package
+      id: package
+      run: |
+        cd openwrt
+        make download -j8 V=11
+
+    # ----------------------------------------------------------
+    # 步骤 12: 编译固件
+    # 失败先同级并发重试一次，仍失败才降级 -j1 V=s（-j1 会把剩余所有包串行）；ccache 开关见步骤 10
+    # ----------------------------------------------------------
+    - name: Compile the firmware
+      id: compile
+      run: |
+        cd openwrt
+        echo -e "$(nproc) thread compile"
+        make -j$(nproc) || make -j$(nproc) || make -j1 V=s || exit 1
+        echo "status=success" >> $GITHUB_OUTPUT
+        echo "FILE_DATE=_$(date +"%Y-%m-%d-%H-%M")" >> $GITHUB_ENV
+
+    # ----------------------------------------------------------
+    # 步骤 13: 检查磁盘使用情况
+    # ----------------------------------------------------------
+    - name: Check space usage
+      if: (!cancelled())
+      run: df -hT
+
+    # ----------------------------------------------------------
+    # 步骤 14: 整理固件文件
+    # 只把可刷写镜像 (*.bin / *.itb) 拷到 release/<设备>/，manifest/buildinfo/校验和不保留
+    # ----------------------------------------------------------
+    - name: Organize firmware files
+      id: organize
+      if: (!cancelled())
+      run: |
+        echo "DEVICE=$DEVICE_NAME" >> $GITHUB_ENV
+        mkdir -p "release/$DEVICE_NAME"
+        # 产物路径用 env 的 SUBTARGET 拼，换设备只改 env 一处
+        for f in openwrt/bin/targets/airoha/${SUBTARGET}/*.bin openwrt/bin/targets/airoha/${SUBTARGET}/*.itb; do
+          [ -e "$f" ] || continue
+          cp "$f" "release/$DEVICE_NAME/"
+        done
+        ls -l "release/$DEVICE_NAME"
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    # ----------------------------------------------------------
+    # 步骤 15: 上传 release/<设备> 散文件目录为 artifact（tar.zst 打包由 release job 执行）
+    # ----------------------------------------------------------
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@main
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: ImmortalWrt_${{ env.FW_VERSION }}_${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: release/${{ env.DEVICE }}
+
+  # ------------------------------------------------------------
+  # Release 发布 job：编译成功后打包上传 Release，并清理旧 runs / Releases
+  # 由 workflow_dispatch 的 release 开关控制，默认关闭；关闭时只保留 artifact
+  # ------------------------------------------------------------
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: needs.build.result == 'success' && !cancelled() && inputs.release
+
+    permissions:
+      contents: write   # 允许创建 Release
+      actions: write    # 允许删除/管理 workflow runs
+
+    steps:
+
+      # ----------------------------------------------------------
+      # 步骤 1: 下载本次 run 的全部 artifact（每个解压到同名子目录）
+      # ----------------------------------------------------------
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # ----------------------------------------------------------
+      # 步骤 2: 把各散文件目录打包成 immortalwrt-<设备>.tar.zst（设备名从 artifact 名反解，约定见步骤 3）
+      # ----------------------------------------------------------
+      - name: Package firmware by device
+        run: |
+          mkdir -p release
+          for d in artifacts/*/; do
+            [ -d "$d" ] || continue
+            name="$(basename "$d")"
+            device="$(echo "$name" | sed -E 's/^ImmortalWrt_[^_]*_//; s/_[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2}$//')"
+            tar --zstd -cf "release/immortalwrt-${device}.tar.zst" -C "$d" .
+            echo "Packaged $device -> release/immortalwrt-${device}.tar.zst"
+          done
+          ls -l release/
+
+      # ----------------------------------------------------------
+      # 步骤 3: 版本号与时间戳从 artifact 名回取，Release 标签与 artifact 名一致
+      # ----------------------------------------------------------
+      - name: Generate release tag
+        id: tag
+        run: |
+          # build job 的 env 不跨 job，版本号从本次 run 的 artifact 名回取（约定 ImmortalWrt_<版本>_<型号>_<日期-时分>）
+          first="$(ls -1 artifacts | head -1)"
+          [[ "$first" =~ ^ImmortalWrt_([0-9A-Za-z.-]+)_(.+)_([0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}-[0-9]{2})$ ]] || { echo "::error::artifact 名不符合命名约定: $first"; exit 1; }
+          fw="${BASH_REMATCH[1]}"
+          ts="${BASH_REMATCH[3]}"
+          echo "release_tag=ImmortalWrt_${fw}_${DEVICE_NAME}_${ts}" >> $GITHUB_OUTPUT
+          touch release.txt
+          echo "ImmortalWrt ${fw} for Nokia XG-040G-MD (Airoha AN7581)" >> release.txt
+          echo "status=success" >> $GITHUB_OUTPUT
+
+      # ----------------------------------------------------------
+      # 步骤 4: 上传固件压缩包到 GitHub Release
+      # ----------------------------------------------------------
+      - name: Upload firmware to release
+        id: release
+        uses: softprops/action-gh-release@v3
+        if: steps.tag.outputs.status == 'success' && !cancelled()
+        with:
+          tag_name: ${{ steps.tag.outputs.release_tag }}
+          body_path: release.txt
+          files: release/*.tar.zst
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ----------------------------------------------------------
+      # 步骤 5: 清理旧 workflow runs（保留 7 天，至少 3 条）
+      # ----------------------------------------------------------
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 7
+          keep_minimum_runs: 3
+
+      # ----------------------------------------------------------
+      # 步骤 6: 清理旧 Release（本设备标签保留最近 3 个，连 tag 一起删）
+      # ----------------------------------------------------------
+      - name: Remove old Releases
+        uses: dev-drprasad/delete-older-releases@v0.3.4
+        if: steps.release.outcome == 'success' && !cancelled()
+        with:
+          keep_latest: 3
+          delete_tags: true
+          delete_tag_pattern: _XG-040G-MD_
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

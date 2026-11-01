@@ -1,0 +1,24 @@
+# 行尾符规范化
+# 背景: 本机 git 配置 core.autocrlf=true, checkout 时会把文本文件转成 CRLF,
+#       导致 .sh 脚本在 bash 下报 "$'\r': command not found" 无法运行。
+# 规则: 会被 Linux 侧读取或执行的文件一律强制 LF（仓库内与工作区都 LF）——
+#       shell 脚本与 overlay/init 脚本、kconfig 读取的 .config 与 configs/*.config
+#       （CRLF 会让 CONFIG_x=y 的值带上 \r）、feeds 配置、CI 可能执行的 python。
+# 例外: *.apk 显式 -text 禁止任何行尾转换。APK 包内含压缩数据，本机 autocrlf=true
+#       下 git 只能靠内容启发式判二进制，一旦被误判成文本，checkout 就会往包里
+#       注入 CR 导致包损坏；这条规则把该风险钉死。
+#       （历史上 pon-packages/*.apk 由 CI 回推入库，2026-10-13 随
+#        build-pon-packages.yml 一并删除；规则保留，给以后手工放入 SDK 编译产物兜底。）
+# 维护: 所有分支保持同一份内容（当前三个分支：AN7581 / MT7981-hanwckf / master；
+#       2026-10-15 原 AN7581-GPON、AN7583-GPON 两支已并入 AN7581，分支增减只改这一行）。
+#       新增跨平台脚本类型时按同样格式追加一行并同步到各分支。
+#       自检: `git ls-files --eol` 里除 *.apk（i/-text）外应全部是 i/lf；
+#       `git grep -I -l -P '\r' <分支>` 应为空（blob 内不含 CR）。
+*.sh text eol=lf
+*.init text eol=lf
+*.py text eol=lf
+*.config text eol=lf
+.config text eol=lf
+feeds.conf.default text eol=lf
+files/** text eol=lf
+*.apk -text

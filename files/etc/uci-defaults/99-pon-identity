@@ -1,0 +1,28 @@
+#!/bin/sh
+# 首次启动写入 OMCI 身份默认值（示例；请按自己原机的身份修改）。
+#
+# 说明：
+#   - 这里只写 OMCI 的三个描述性字段和 vendor_id，不影响线路模式（默认仍是 XG-PON）。
+#   - PON 序列号（4 字符厂商前缀 + 8 位十六进制）和 LOID/LOID 密码与运营商绑定，
+#     没有默认值，请刷机后在 LuCI「网络 → PON」里填写，或在此处补上。
+#   - 恢复出厂 / sysupgrade -n 之后本脚本会重新执行，这几项默认值随之恢复。
+#
+# uci-defaults 脚本执行成功后会被系统删除，不会每次启动都跑。
+
+[ -f /etc/config/pon ] || exit 0
+
+uci -q get pon.line0 >/dev/null 2>&1 || uci set pon.line0=xpon
+uci -q get pon.line0_omci >/dev/null 2>&1 || uci set pon.line0_omci=omci
+
+uci set pon.line0.device='pon0'
+uci set pon.line0_omci.line='line0'
+uci set pon.line0_omci.device='omci0'
+
+uci set pon.line0_omci.vendor_id='ZTEG'
+uci set pon.line0_omci.equipment_id='ZXHN G7615TV2-XG'
+uci set pon.line0_omci.hardware_version='V2.0'
+uci set pon.line0_omci.software_version='V3.0.0P1T3'
+
+uci commit pon
+
+exit 0
