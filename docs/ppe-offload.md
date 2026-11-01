@@ -45,7 +45,7 @@ wc -l < /sys/kernel/debug/ppe/entries    # > 0
 
 ## 限制
 
-- **只对 `lan1`（2.5G）和 `pon0` 生效**。lan2/3/4 是 MT7530 的 DSA 口，走的不是 airoha_eth，不能进这个 flowtable；
+- **只对 `lan1`（2.5G）和 `pon0` 生效**。lan2/3/4 是 MT7530 的 DSA 口，走的不是 airoha_eth，不能进这个 flowtable；本固件把它们固定为 IPTV 桥接口，主 LAN 只保留 lan1；
 - 如果换了 LAN/WAN 物理口，改 `DEV_LAN` / `DEV_WAN` 环境变量，或修改 `/usr/sbin/ppe-offload` 默认值；
 - fw4 自带的 `flow_offloading` / `flow_offloading_hw` 可以保持开启（它的 flowtable 绑不上，但无害），也可以关掉，只留 `ppe` 表；
 - NPU 固件版本与这个修复无关：`2.1.1-TLB7.3.283.1456-62` 就够用；

@@ -1,0 +1,3 @@
+#!/bin/sh
+[ -x /etc/init.d/iptv-multi ] && /etc/init.d/iptv-multi enable
+exit 0
