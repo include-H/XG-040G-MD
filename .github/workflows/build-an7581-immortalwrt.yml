@@ -254,6 +254,11 @@ jobs:
           echo "::error::CONFIG_CCACHE=y 没能进入 defconfig 结果，检查 $CONFIG_FILE 里是否有 CONFIG_DEVEL=y"
           exit 1
         }
+        # UPnP 不能被 defconfig 静默丢弃（miniupnpd 依赖不可用时会发生）
+        grep -q '^CONFIG_PACKAGE_luci-app-upnp=y' .config || {
+          echo "::error::luci-app-upnp 被 defconfig 丢弃，检查 packages feed 里 miniupnpd 是否可用"
+          exit 1
+        }
         $GITHUB_WORKSPACE/$SCRIPT_SET_FIRMWARE_DEFAULTS
 
     # ----------------------------------------------------------
