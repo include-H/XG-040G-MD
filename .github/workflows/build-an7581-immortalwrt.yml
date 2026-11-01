@@ -44,12 +44,14 @@ env:
   # 目标设备和子目标（编译产物路径使用）
   DEVICE_NAME: XG-040G-MD
   SUBTARGET: an7581
-  # 三个自定义脚本 = 流程里的三个插入点，执行阶段见各行注释
+  # 四个自定义脚本 = 流程里的四个插入点，执行阶段见各行注释
   # 1) ./scripts/feeds update -a 之前 —— 增删第三方 feed 源（当前插入 mosdns，追加 mosdns_panel 与 lucky）
   SCRIPT_ADD_FEED_SOURCES: add-feed-sources.sh
   # 2) ./scripts/feeds install -a 之后、make defconfig 之前 —— clone 非 feed 格式的第三方包（lucky / mosdns / mosdns_panel 由 add-feed-sources.sh 处理，此处仅 npu）
   SCRIPT_CLONE_PACKAGES: clone-packages.sh
-  # 3) make defconfig 之后 —— 改固件出厂默认值 (默认 IP、DHCP 等)
+  # 3) feeds install 之后 —— 把本仓库 patches/ 里的补丁注入 feed 包目录（当前: airoha-xpon 的 MBI RX overrun 自愈）
+  SCRIPT_APPLY_FEED_PATCHES: apply-feed-patches.sh
+  # 4) make defconfig 之后 —— 改固件出厂默认值 (默认 IP、DHCP 等)
   SCRIPT_SET_FIRMWARE_DEFAULTS: set-firmware-defaults.sh
   # 编译环境时区
   TZ: Asia/Shanghai
@@ -213,6 +215,16 @@ jobs:
         chmod +x $SCRIPT_CLONE_PACKAGES
         cd openwrt
         $GITHUB_WORKSPACE/$SCRIPT_CLONE_PACKAGES
+
+    # ----------------------------------------------------------
+    # 步骤 8.6: 给 feed 包补上游未合并的补丁（当前: airoha-xpon 的 MBI RX overrun 自愈，issue #49）
+    # 补丁放本仓库 patches/<包名>/，脚本会先 dry-run 再放进 feeds/<feed>/<包>/patches/
+    # ----------------------------------------------------------
+    - name: Apply feed patches
+      run: |
+        chmod +x $SCRIPT_APPLY_FEED_PATCHES
+        cd openwrt
+        $GITHUB_WORKSPACE/$SCRIPT_APPLY_FEED_PATCHES
 
     # ----------------------------------------------------------
     # 步骤 9: 加载 APK 仓库签名密钥（Secret: PONWRT_APK_PRIVATE_KEY，未配置则跳过）

@@ -34,6 +34,7 @@
 | 身份默认值（示例） | `vendor_id=ZTEG`、`equipment_id=ZXHN G7615TV2-XG`、`hardware_version=V2.0`、`software_version=V3.0.0P1T3`，在 `files/etc/uci-defaults/99-pon-identity` 里改 |
 | 内核 | 启用 BTF（dae 的 eBPF CO-RE 需要） |
 | 网络加速 | PPE/NPU 硬件 offload：用 `lan1`+`pon0` 物理口建 flowtable（见文档），CPU 约 3% @ 1.1Gbps |
+| PON 稳定性 | 补丁：MBI RX overrun 风暴后自动 MAC 复位（issue #49），死链 463s(需手动) → 17.6s 自动恢复，见 `docs/pon-mbi-reset.md` |
 | 已移除 | AdGuard Home、OpenClash |
 
 > PON 序列号（4 字符厂商前缀 + 8 位十六进制）和 LOID / LOID 密码跟运营商绑定，**不写默认值**。
