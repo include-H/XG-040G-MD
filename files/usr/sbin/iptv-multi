@@ -61,12 +61,12 @@ uci commit iptv
 # 6) 桥接过滤：只允许 IPTV 口 <-> 业务 VLAN，其余丢弃
 nft delete table bridge iptv 2>/dev/null || true
 nft add table bridge iptv
-nft add chain bridge iptv fwd "{ type filter hook forward priority filter; policy accept; }"
+nft add chain bridge iptv iptv_forward "{ type filter hook forward priority filter; policy accept; }"
 for p in $PORTS; do
-	nft add rule bridge iptv fwd iifname "$p" oifname "$SVC" counter accept
-	nft add rule bridge iptv fwd iifname "$SVC" oifname "$p" counter accept
+	nft add rule bridge iptv iptv_forward iifname "$p" oifname "$SVC" counter accept
+	nft add rule bridge iptv iptv_forward iifname "$SVC" oifname "$p" counter accept
 done
-nft add rule bridge iptv fwd counter drop
+nft add rule bridge iptv iptv_forward counter drop
 
 # 7) 应用
 ubus call network reload >/dev/null 2>&1 || true
