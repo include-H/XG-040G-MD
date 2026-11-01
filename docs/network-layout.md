@@ -38,7 +38,7 @@ WAN (PPPoE, pon0.41)
 
 - `/usr/sbin/ppe-offload`：`flowtable devices = { lan1, pon0 }`，触发 PPE/NPU offload；
 - `/usr/sbin/iptv-multi`：`br-lan = lan1`，`br-iptv = lan2 lan3 lan4 + pon0.43`；
-- 单口版 `luci-app-iptv` 默认 `enabled=0`，避免它把桥改回单口；
+- 不再安装单口版 `luci-app-iptv`，避免它把桥改回单口；
 - IPTV 业务 VLAN 默认 `43`，可在脚本里用 `SVC_VLAN` 覆盖。
 
 > 文档里的地址和 VLAN 都是示例，按自己环境替换。
