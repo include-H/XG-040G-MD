@@ -1,0 +1,15 @@
+{
+	"luci-app-iptv-multi": {
+		"description": "Grant access to IPTV multi-port configuration",
+		"read": {
+			"uci": [ "iptv_multi", "network" ],
+			"ubus": {
+				"network.device": [ "status" ],
+				"network.interface": [ "dump" ]
+			}
+		},
+		"write": {
+			"uci": [ "iptv_multi" ]
+		}
+	}
+}

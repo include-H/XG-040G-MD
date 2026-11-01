@@ -1,8 +1,16 @@
 #!/bin/sh /etc/rc.common
-# 在 network/firewall 之后应用多口 IPTV 布局。
+# 多口 IPTV 布局：开机和 iptv_multi 配置变更时应用。
 START=99
 USE_PROCD=1
 
 start_service() {
-	/usr/sbin/iptv-multi
+	/usr/libexec/iptv-multi-apply
+}
+
+reload_service() {
+	/usr/libexec/iptv-multi-apply
+}
+
+service_triggers() {
+	procd_add_reload_trigger "iptv_multi"
 }

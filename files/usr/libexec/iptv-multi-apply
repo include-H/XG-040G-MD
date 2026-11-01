@@ -1,0 +1,164 @@
+#!/bin/sh
+# 多口 IPTV 配置应用：读取 /etc/config/iptv_multi，生成 VLAN / 桥 / nft 规则。
+# 由 /etc/init.d/iptv-multi 在开机和配置变更时调用。
+
+set -eu
+. /lib/functions.sh
+
+fail() {
+	logger -t iptv-multi "$*"
+	echo "iptv-multi: $*" >&2
+	exit 1
+}
+
+validate_ifname() {
+	local n="$1"
+	[ -n "$n" ] && [ "${#n}" -le 15 ] || return 1
+	case "$n" in *[!A-Za-z0-9_.:-]*) return 1 ;; esac
+	return 0
+}
+
+validate_vlan() {
+	case "$1" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$1" -ge 1 ] && [ "$1" -le 4094 ]
+}
+
+config_load iptv_multi
+config_get_bool ENABLED config enabled 0
+config_get UPLINK config uplink pon0
+config_get SERVICE_VLAN config service_vlan
+config_get MULTICAST_VLAN config multicast_vlan
+config_get IGMP_VLAN config igmp_vlan
+
+PORTS=""
+append_port() { PORTS="$PORTS $1"; }
+config_list_foreach config lan_ports append_port
+PORTS=${PORTS# }
+
+# 找 br-lan 的 device 段
+config_load network
+BR_LAN_SECTION=""
+find_br_lan() {
+	local name
+	config_get name "$1" name
+	[ "$name" = "br-lan" ] && BR_LAN_SECTION="$1"
+}
+config_foreach find_br_lan device
+
+restore_ports() {
+	[ -n "$BR_LAN_SECTION" ] || return 0
+	for p in $PORTS; do
+		uci -q add_list "network.$BR_LAN_SECTION.ports=$p"
+	done
+}
+
+cleanup() {
+	uci -q delete network.luci_iptv
+	uci -q delete network.luci_iptv_bridge
+	uci -q delete network.luci_iptv_service_vlan
+	uci -q delete network.luci_iptv_multicast_vlan
+	uci -q delete network.luci_iptv_igmp_vlan
+	nft delete table bridge iptv 2>/dev/null || true
+}
+
+if [ "$ENABLED" -ne 1 ]; then
+	cleanup
+	restore_ports
+	uci commit network
+	ubus call network reload >/dev/null 2>&1 || true
+	exit 0
+fi
+
+validate_ifname "$UPLINK" || fail "invalid uplink device"
+validate_vlan "$SERVICE_VLAN" || fail "invalid service VLAN"
+[ -n "$PORTS" ] || fail "no IPTV LAN ports selected"
+for p in $PORTS; do validate_ifname "$p" || fail "invalid LAN port $p"; done
+[ -z "$MULTICAST_VLAN" ] || validate_vlan "$MULTICAST_VLAN" || fail "invalid multicast VLAN"
+[ -z "$IGMP_VLAN" ] || validate_vlan "$IGMP_VLAN" || fail "invalid IGMP VLAN"
+[ -z "$MULTICAST_VLAN" ] || [ "$MULTICAST_VLAN" != "$SERVICE_VLAN" ] || fail "multicast VLAN must differ from service VLAN"
+
+# 从 br-lan 摘掉 IPTV 口，其余口保持不动
+for p in $PORTS; do
+	[ -n "$BR_LAN_SECTION" ] && uci -q del_list "network.$BR_LAN_SECTION.ports=$p"
+done
+
+# 业务 VLAN + 可选组播/IGMP VLAN
+uci set network.luci_iptv_service_vlan=device
+uci set network.luci_iptv_service_vlan.type=8021q
+uci set network.luci_iptv_service_vlan.ifname="$UPLINK"
+uci set network.luci_iptv_service_vlan.vid="$SERVICE_VLAN"
+uci set network.luci_iptv_service_vlan.name=ct-iptv-svc
+
+if [ -n "$MULTICAST_VLAN" ]; then
+	uci set network.luci_iptv_multicast_vlan=device
+	uci set network.luci_iptv_multicast_vlan.type=8021q
+	uci set network.luci_iptv_multicast_vlan.ifname="$UPLINK"
+	uci set network.luci_iptv_multicast_vlan.vid="$MULTICAST_VLAN"
+	uci set network.luci_iptv_multicast_vlan.name=ct-iptv-mc
+else
+	uci -q delete network.luci_iptv_multicast_vlan
+fi
+
+if [ -n "$IGMP_VLAN" ] && [ "$IGMP_VLAN" != "$SERVICE_VLAN" ] && \
+   { [ -z "$MULTICAST_VLAN" ] || [ "$IGMP_VLAN" != "$MULTICAST_VLAN" ]; }; then
+	uci set network.luci_iptv_igmp_vlan=device
+	uci set network.luci_iptv_igmp_vlan.type=8021q
+	uci set network.luci_iptv_igmp_vlan.ifname="$UPLINK"
+	uci set network.luci_iptv_igmp_vlan.vid="$IGMP_VLAN"
+	uci set network.luci_iptv_igmp_vlan.name=ct-iptv-igmp
+	IGMP_PORT=ct-iptv-igmp
+else
+	uci -q delete network.luci_iptv_igmp_vlan
+	if [ -n "$MULTICAST_VLAN" ]; then IGMP_PORT=ct-iptv-mc; else IGMP_PORT=ct-iptv-svc; fi
+fi
+
+# br-iptv
+uci set network.luci_iptv_bridge=device
+uci set network.luci_iptv_bridge.type=bridge
+uci set network.luci_iptv_bridge.name=br-iptv
+uci set network.luci_iptv_bridge.stp=0
+uci set network.luci_iptv_bridge.igmp_snooping=0
+uci -q delete network.luci_iptv_bridge.ports
+for p in $PORTS; do
+	uci add_list "network.luci_iptv_bridge.ports=$p"
+done
+uci add_list network.luci_iptv_bridge.ports=ct-iptv-svc
+[ -n "$MULTICAST_VLAN" ] && uci add_list network.luci_iptv_bridge.ports=ct-iptv-mc
+[ "$IGMP_PORT" = "ct-iptv-igmp" ] && uci add_list network.luci_iptv_bridge.ports=ct-iptv-igmp
+
+uci set network.luci_iptv=interface
+uci set network.luci_iptv.proto=none
+uci set network.luci_iptv.device=br-iptv
+uci set network.luci_iptv.auto=1
+uci set network.luci_iptv.delegate=0
+uci commit network
+
+# nft 桥过滤：每个 IPTV 口 <-> 业务 VLAN；组播/IGMP 按需放行；其余丢弃
+nft delete table bridge iptv 2>/dev/null || true
+nft add table bridge iptv
+nft add chain bridge iptv iptv_forward "{ type filter hook forward priority filter; policy accept; }"
+
+for p in $PORTS; do
+	nft add rule bridge iptv iptv_forward iifname "$p" oifname "ct-iptv-svc" counter accept
+	nft add rule bridge iptv iptv_forward iifname "ct-iptv-svc" oifname "$p" counter accept
+done
+
+if [ -n "$MULTICAST_VLAN" ]; then
+	for p in $PORTS; do
+		nft add rule bridge iptv iptv_forward iifname "ct-iptv-mc" oifname "$p" \
+			ether type ip ip daddr 224.0.0.0/4 counter accept
+	done
+	nft add rule bridge iptv iptv_forward iifname "ct-iptv-svc" oifname "ct-iptv-mc" counter drop
+	nft add rule bridge iptv iptv_forward iifname "ct-iptv-mc" oifname "ct-iptv-svc" counter drop
+fi
+
+if [ "$IGMP_PORT" = "ct-iptv-igmp" ]; then
+	for p in $PORTS; do
+		nft add rule bridge iptv iptv_forward iifname "$p" oifname "ct-iptv-igmp" \
+			ether type ip ip protocol igmp counter accept
+		nft add rule bridge iptv iptv_forward iifname "$p" oifname "ct-iptv-igmp" counter drop
+	done
+fi
+
+nft add rule bridge iptv iptv_forward counter drop
+ubus call network reload >/dev/null 2>&1 || true

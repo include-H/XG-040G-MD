@@ -1,0 +1,14 @@
+{
+	"admin/network/iptv-multi": {
+		"title": "IPTV (multi-port)",
+		"order": 86,
+		"action": {
+			"type": "view",
+			"path": "iptv/multi"
+		},
+		"depends": {
+			"acl": [ "luci-app-iptv-multi" ],
+			"uci": { "iptv_multi": true }
+		}
+	}
+}
