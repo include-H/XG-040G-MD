@@ -1,0 +1,23 @@
+#!/bin/sh
+# 用物理网口建 flowtable，触发 Airoha PPE/NPU 硬件 offload。
+#
+# 背景：fw4 生成的 flowtable 设备是 VLAN/PPP/DSA 口（如 pon0.41、pppoe-wan、
+# lan2），这些设备没有 airoha_eth 的 ndo_setup_tc，驱动的
+# airoha_ppe_offload_setup() 不会被调用，npu_attached 一直是 0。
+# 改成物理口 lan1 + pon0 后，PPE 能正常绑定（bind > 0，CPU 明显下降）。
+#
+# 可用环境变量覆盖（例如其它机型）：
+#   DEV_LAN=lan1 DEV_WAN=pon0 /usr/sbin/ppe-offload
+
+set -eu
+
+DEV_LAN=${DEV_LAN:-lan1}
+DEV_WAN=${DEV_WAN:-pon0}
+
+# 已存在就不重复建，避免 reload 时清掉现有 offload 条目
+nft list table inet ppe >/dev/null 2>&1 && exit 0
+
+nft add table inet ppe
+nft add flowtable inet ppe ft "{ hook ingress priority 0; devices = { $DEV_LAN, $DEV_WAN }; flags offload; }"
+nft add chain inet ppe c "{ type filter hook forward priority 10; policy accept; }"
+nft add rule inet ppe c meta l4proto { tcp, udp } flow add @ft

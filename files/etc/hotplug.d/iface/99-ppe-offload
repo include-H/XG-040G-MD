@@ -1,0 +1,5 @@
+#!/bin/sh
+# 接口 up 时尝试建立 PPE offload 表，覆盖首次启动/重连的情况。
+[ "$ACTION" = "ifup" ] || exit 0
+[ -x /usr/sbin/ppe-offload ] && /usr/sbin/ppe-offload
+exit 0
