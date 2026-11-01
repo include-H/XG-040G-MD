@@ -62,7 +62,8 @@ jobs:
     runs-on: ubuntu-24.04
 
     permissions:
-      actions: write    # 允许上传编译产物 artifact
+      contents: read     # 私有仓库时 checkout 需要
+      actions: write     # 允许上传编译产物 artifact
 
     steps:
     # ----------------------------------------------------------
