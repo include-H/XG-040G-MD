@@ -8,6 +8,7 @@
 
 - [DNS 泄露防护（两套架构）](docs/dns-leak.md)
 - [PPE 硬件 offload 修复记录](docs/ppe-offload.md)
+- [网络布局（lan1 主 LAN / lan2-4 IPTV）](docs/network-layout.md)
 
 ## 硬件
 

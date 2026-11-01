@@ -53,7 +53,7 @@ MosDNS 的 redirect 只处理 UDP 53；设备用 TCP 53、DoT 853 仍然能绕�
 uci add firewall rule
 uci set firewall.@rule[-1].name='Allow-proxy-DNS'
 uci set firewall.@rule[-1].src='lan'
-uci set firewall.@rule[-1].src_ip='192.168.1.253'
+uci set firewall.@rule[-1].src_ip='192.168.1.10'
 uci set firewall.@rule[-1].proto='tcp udp'
 uci set firewall.@rule[-1].dest_port='53 853'
 uci set firewall.@rule[-1].target='ACCEPT'
@@ -113,7 +113,7 @@ uci commit dhcp
 1. MosDNS 负责本机 DNS（缓存 + 广告过滤），`local_dns_redirect=1` 接管 LAN 的 53。
 2. 境外域名不要用国内 DoH 解析：
    ```sh
-   uci set mosdns.config.remote_dns='udp://192.168.1.253:1053'
+   uci set mosdns.config.remote_dns='udp://192.168.1.10:1053'
    uci commit mosdns
    ```
    前提是代理设备开了 DNS 监听（mihomo 常见 1053）。没有 DNS 监听就保持国内 DoH，接受“不泄露但可能污染”。
