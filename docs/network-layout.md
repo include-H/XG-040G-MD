@@ -45,3 +45,12 @@ WAN (PPPoE, pon0.41)
 - 不再安装单口版 `luci-app-iptv`，避免它把桥改回单口。
 
 > 文档里的地址和 VLAN 都是示例，按自己环境替换。
+
+## 从主 LAN 看 IPTV
+
+`Multicast VLAN` 只作用在 `br-iptv` 内部，**不会**把组播放进 `br-lan`。所以不插 IPTV 口时，br-lan 设备直接访问 `rtp://239.x.x.x:端口` 是看不到的。
+
+两种做法：
+
+1. **msd_lite（推荐）**：给 IPTV 侧一个带 IP 的接口（或在 `br-iptv` 上配 IP），在「服务 → msd_lite」绑定该接口；LAN 设备播放 `http://192.168.1.1:7088/rtp/239.x.x.x:端口`。
+2. **组播路由**（igmpproxy / smcroute）：把 `pon0.43` 的组播转发到 `br-lan`，并放行 IGMP；配置更复杂，而且组播会进入主 LAN。
