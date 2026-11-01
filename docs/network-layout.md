@@ -52,5 +52,12 @@ WAN (PPPoE, pon0.41)
 
 两种做法：
 
-1. **msd_lite（推荐）**：给 IPTV 侧一个带 IP 的接口（或在 `br-iptv` 上配 IP），在「服务 → msd_lite」绑定该接口；LAN 设备播放 `http://192.168.1.1:7088/rtp/239.x.x.x:端口`。
+1. **msd_lite（推荐，页面已支持）**：在「网络 → IPTV (multi-port)」勾选「在主 LAN 提供 HTTP 组播」，选择 IPTV 接口地址（DHCP 或静态），保存后主 LAN 设备播放：
+
+   ```
+   http://192.168.1.1:7088/rtp/239.x.x.x:端口
+   ```
+
+   实测 `rtp://239.1.1.7:8007` 对应 `http://192.168.1.1:7088/rtp/239.1.1.7:8007`。
+
 2. **组播路由**（igmpproxy / smcroute）：把 `pon0.43` 的组播转发到 `br-lan`，并放行 IGMP；配置更复杂，而且组播会进入主 LAN。

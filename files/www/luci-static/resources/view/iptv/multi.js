@@ -80,6 +80,38 @@ return view.extend({
 		o.rmempty = true;
 		o.depends('enabled', '1');
 
+		o = s.option(form.Flag, 'msd_lite', _('在主 LAN 提供 HTTP 组播（msd_lite）'),
+			_('路由器在 IPTV VLAN 上接收组播并转成 HTTP，主 LAN 设备可用 http://路由器:端口/rtp/组播IP:端口 播放，不需要插 IPTV 口。'));
+		o.default = '0';
+		o.rmempty = false;
+		o.depends('enabled', '1');
+
+		o = s.option(form.Value, 'msd_lite_port', _('msd_lite 端口'));
+		o.default = '7088';
+		o.datatype = 'port';
+		o.rmempty = false;
+		o.depends('msd_lite', '1');
+
+		o = s.option(form.ListValue, 'iptv_ip_mode', _('IPTV 接口地址'),
+			_('msd_lite 需要 IPTV 侧有一个带 IP 的接口来发送 IGMP。DHCP 失败时改用静态地址。'));
+		o.value('dhcp', _('DHCP 客户端'));
+		o.value('static', _('静态地址'));
+		o.default = 'dhcp';
+		o.rmempty = false;
+		o.depends('msd_lite', '1');
+
+		o = s.option(form.Value, 'iptv_ipaddr', _('静态 IP'));
+		o.datatype = 'ip4addr';
+		o.placeholder = '10.0.0.2';
+		o.rmempty = true;
+		o.depends('iptv_ip_mode', 'static');
+
+		o = s.option(form.Value, 'iptv_netmask', _('子网掩码'));
+		o.datatype = 'ip4addr';
+		o.default = '255.255.255.0';
+		o.rmempty = true;
+		o.depends('iptv_ip_mode', 'static');
+
 		return m.render();
 	}
 });

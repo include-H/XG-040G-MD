@@ -29,6 +29,11 @@ config_get UPLINK config uplink pon0
 config_get SERVICE_VLAN config service_vlan
 config_get MULTICAST_VLAN config multicast_vlan
 config_get IGMP_VLAN config igmp_vlan
+config_get_bool MSD_LITE config msd_lite 0
+config_get MSD_PORT config msd_lite_port 7088
+config_get IPTV_IP_MODE config iptv_ip_mode dhcp
+config_get IPTV_IPADDR config iptv_ipaddr
+config_get IPTV_NETMASK config iptv_netmask 255.255.255.0
 
 PORTS=""
 append_port() { PORTS="$PORTS $1"; }
@@ -59,6 +64,9 @@ cleanup() {
 	uci -q delete network.luci_iptv_multicast_vlan
 	uci -q delete network.luci_iptv_igmp_vlan
 	nft delete table bridge iptv 2>/dev/null || true
+	uci -q delete firewall.msd_lite
+	uci commit firewall 2>/dev/null || true
+	/etc/init.d/msd_lite stop >/dev/null 2>&1 || true
 }
 
 if [ "$ENABLED" -ne 1 ]; then
@@ -127,11 +135,47 @@ uci add_list network.luci_iptv_bridge.ports=ct-iptv-svc
 [ "$IGMP_PORT" = "ct-iptv-igmp" ] && uci add_list network.luci_iptv_bridge.ports=ct-iptv-igmp
 
 uci set network.luci_iptv=interface
-uci set network.luci_iptv.proto=none
 uci set network.luci_iptv.device=br-iptv
 uci set network.luci_iptv.auto=1
 uci set network.luci_iptv.delegate=0
+
+if [ "$MSD_LITE" -eq 1 ]; then
+	if [ "$IPTV_IP_MODE" = "static" ]; then
+		[ -n "$IPTV_IPADDR" ] || fail "msd_lite static IP is required"
+		uci set network.luci_iptv.proto=static
+		uci set network.luci_iptv.ipaddr="$IPTV_IPADDR"
+		uci set network.luci_iptv.netmask="$IPTV_NETMASK"
+	else
+		uci set network.luci_iptv.proto=dhcp
+		uci -q delete network.luci_iptv.ipaddr
+		uci -q delete network.luci_iptv.netmask
+	fi
+else
+	uci set network.luci_iptv.proto=none
+	uci -q delete network.luci_iptv.ipaddr
+	uci -q delete network.luci_iptv.netmask
+fi
 uci commit network
+
+if [ "$MSD_LITE" -eq 1 ]; then
+	uci -q delete msd_lite.@instance[0]
+	uci add msd_lite instance
+	uci set msd_lite.@instance[-1].enabled='1'
+	uci add_list msd_lite.@instance[-1].address="0.0.0.0:$MSD_PORT"
+	uci set msd_lite.@instance[-1].network='luci_iptv'
+	uci commit msd_lite
+
+	uci set firewall.msd_lite=rule
+	uci set firewall.msd_lite.name='Allow-msd_lite'
+	uci set firewall.msd_lite.src='lan'
+	uci set firewall.msd_lite.proto='tcp'
+	uci set firewall.msd_lite.dest_port="$MSD_PORT"
+	uci set firewall.msd_lite.target='ACCEPT'
+	uci commit firewall
+else
+	uci -q delete firewall.msd_lite
+	uci commit firewall
+fi
 
 # nft 桥过滤：每个 IPTV 口 <-> 业务 VLAN；组播/IGMP 按需放行；其余丢弃
 nft delete table bridge iptv 2>/dev/null || true
@@ -162,3 +206,8 @@ fi
 
 nft add rule bridge iptv iptv_forward counter drop
 ubus call network reload >/dev/null 2>&1 || true
+
+if [ "$MSD_LITE" -eq 1 ]; then
+	/etc/init.d/msd_lite restart >/dev/null 2>&1 || true
+	/etc/init.d/firewall reload >/dev/null 2>&1 || true
+fi

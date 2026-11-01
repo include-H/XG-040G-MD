@@ -29,7 +29,7 @@
 | 基础 | PonWrt（ImmortalWrt）master，Linux 6.18，APK 包管理，SquashFS + UBIFS |
 | PON | `luci-app-pon`、`airoha-ponctl`、`airoha-pond`、`airoha-pon-debug`、`airoha-en7581-npu-firmware`；默认线路模式 **XG-PON** |
 | DNS | MosDNS 出厂启用：监听 5335，dnsmasq 转发，缓存，国内 DoH（阿里/腾讯/DNSPod），`adblock_set` 过滤 217heidai 列表 |
-| IPTV | LuCI「网络 → IPTV (multi-port)」：多 LAN 口 + 业务/组播/IGMP 三个 VLAN；`msd_lite` 组播转 HTTP（7088）。不再安装单口版 `luci-app-iptv` |
+| IPTV | LuCI「网络 → IPTV (multi-port)」：多 LAN 口 + 业务/组播/IGMP 三个 VLAN；可选 msd_lite 把组播转 HTTP 给主 LAN（7088）。不再安装单口版 `luci-app-iptv` |
 | 代理 | `dae` + geoip/geosite，**默认关闭**，节点和分流规则不预置；附 `dae-sub` 订阅归一化工具 |
 | 身份默认值（示例） | `vendor_id=ZTEG`、`equipment_id=ZXHN G7615TV2-XG`、`hardware_version=V2.0`、`software_version=V3.0.0P1T3`，在 `files/etc/uci-defaults/99-pon-identity` 里改 |
 | 内核 | 启用 BTF（dae 的 eBPF CO-RE 需要） |
